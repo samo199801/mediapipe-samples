@@ -1,40 +1,59 @@
+from ultralytics import YOLO
 import cv2
-import numpy as np
+import mediapipe as mp
 
+# Load YOLOv8 model
+model = YOLO('yolov8n.pt')
 
-MARGIN = 10  # pixels
-ROW_SIZE = 10  # pixels
-FONT_SIZE = 1
-FONT_THICKNESS = 1
-TEXT_COLOR = (255, 0, 0)  # red
+# Initialize webcam
+cap = cv2.VideoCapture(0)  # Use 0 for webcam
 
+# Set up MediaPipe Pose
+mp_pose = mp.solutions.pose
+pose = mp_pose.Pose()
 
-def visualize(
-    image,
-    detection_result
-) -> np.ndarray:
-  """Draws bounding boxes on the input image and return it.
-  Args:
-    image: The input RGB image.
-    detection_result: The list of all "Detection" entities to be visualized.
-  Returns:
-    Image with bounding boxes.
-  """
-  for detection in detection_result.detections:
-    # Draw bounding_box
-    bbox = detection.bounding_box
-    start_point = bbox.origin_x, bbox.origin_y
-    end_point = bbox.origin_x + bbox.width, bbox.origin_y + bbox.height
-    cv2.rectangle(image, start_point, end_point, TEXT_COLOR, 3)
+while True:
+    ret, frame = cap.read()
+    if not ret:
+        break
 
-    # Draw label and score
-    category = detection.categories[0]
-    category_name = category.category_name
-    probability = round(category.score, 2)
-    result_text = category_name + ' (' + str(probability) + ')'
-    text_location = (MARGIN + bbox.origin_x,
-                     MARGIN + ROW_SIZE + bbox.origin_y)
-    cv2.putText(image, result_text, text_location, cv2.FONT_HERSHEY_PLAIN,
-                FONT_SIZE, TEXT_COLOR, FONT_THICKNESS)
+    results = model(frame)[0]  # Run YOLO
 
-  return image
+    for box in results.boxes:
+        cls = int(box.cls[0])
+        label = model.names[cls]
+        x1, y1, x2, y2 = map(int, box.xyxy[0])
+
+        if label == "person":
+            person_crop = frame[y1:y2, x1:x2]
+            image_rgb = cv2.cvtColor(person_crop, cv2.COLOR_BGR2RGB)
+            result_pose = pose.process(image_rgb)
+
+            has_helmet = False
+            has_bag = False
+
+            for item in results.boxes:
+                cls2 = int(item.cls[0])
+                label2 = model.names[cls2]
+                bx1, by1, bx2, by2 = map(int, item.xyxy[0])
+
+                if label2 == "backpack":
+                    if bx1 < x2 and bx2 > x1:
+                        has_bag = True
+                elif label2 == "helmet":  # Only if using custom model that detects helmet
+                    if bx1 < x2 and bx2 > x1:
+                        has_helmet = True
+
+            # Draw box
+            color = (0, 255, 0) if has_helmet and has_bag else (0, 0, 255)
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+            cv2.putText(frame, f"Helmet: {has_helmet} | Bag: {has_bag}", (x1, y1 - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+
+    cv2.imshow("Helmet & Bag Detection", frame)
+    if cv2.waitKey(1) & 0xFF == 27:
+        break
+
+cap.release()
+cv2.destroyAllWindows()
+
